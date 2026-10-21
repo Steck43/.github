@@ -1,0 +1,139 @@
+# Shared house checks, called from each repo's own workflow:
+#
+#   house:
+#     uses: Steck43/.github/.github/workflows/house-checks.yml@<sha>
+#     with:
+#       checks-ref: <the same sha>
+#
+# Pin both lines to one commit SHA. A change here reaches a repo only when that
+# repo moves its pin in a reviewed pull request.
+name: house checks
+
+on:
+  workflow_call:
+    inputs:
+      checks-ref:
+        description: Commit SHA of Steck43/.github to load the checks from; the same SHA as the uses pin.
+        required: true
+        type: string
+      author-email:
+        description: Author and committer email every commit in the range must use.
+        required: false
+        type: string
+        default: 106559550+Steck43@users.noreply.github.com
+
+permissions:
+  contents: read
+
+jobs:
+  dashes:
+    name: house (dashes, paths and claims)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Steck43/.github
+          ref: ${{ inputs.checks-ref }}
+          path: .house
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: added lines
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          git rev-parse --verify "$BASE^{commit}"
+          python -I .house/checks/prepush_text.py diff "$BASE" HEAD
+
+  text:
+    name: house (title and body)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Steck43/.github
+          ref: ${{ inputs.checks-ref }}
+          path: .house
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: title and body
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          printf '%s\n' "$PR_TITLE" > "$RUNNER_TEMP/title.txt"
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/body.md"
+          python -I .house/checks/prepush_text.py text pr-title "$RUNNER_TEMP/title.txt"
+          python -I .house/checks/prepush_text.py body "$RUNNER_TEMP/body.md" --base "$PR_BASE"
+
+  commits:
+    name: house (commit subject and authorship)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Steck43/.github
+          ref: ${{ inputs.checks-ref }}
+          path: .house
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: every commit in the range
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          WANT: ${{ inputs.author-email }}
+        run: |
+          git rev-parse --verify "$BASE^{commit}"
+          fail=0
+          for c in $(git rev-list --no-merges "$BASE..HEAD"); do
+            ae="$(git log -1 --format=%ae "$c")"
+            ce="$(git log -1 --format=%ce "$c")"
+            if [ "$ae" != "$WANT" ]; then echo "::error::$c author email is not the account address"; fail=1; fi
+            if [ "$ce" != "$WANT" ] && [ "$ce" != "noreply@github.com" ]; then echo "::error::$c committer email is not the account address"; fail=1; fi
+            git log -1 --format=%B "$c" > "$RUNNER_TEMP/msg.txt"
+            if ! python -I .house/checks/prepush_text.py text "commit-$c" "$RUNNER_TEMP/msg.txt"; then echo "::error::$c message fails the text check"; fail=1; fi
+            if ! python -I .house/checks/no_ai_trailers.py "$RUNNER_TEMP/msg.txt"; then echo "::error::$c carries an AI trailer"; fail=1; fi
+          done
+          exit "$fail"
+
+  voice:
+    name: house (voice)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Steck43/.github
+          ref: ${{ inputs.checks-ref }}
+          path: .house
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: voice on the range
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          git rev-parse --verify "$BASE^{commit}"
+          python -I .house/checks/voice_lint.py --commits --base "$BASE" --head HEAD --prose --fail-on-warn
